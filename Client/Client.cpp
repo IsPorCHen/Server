@@ -1,6 +1,8 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define _CRT_SECURE_NO_WARNINGS
+#define WIN32_LEAN_AND_MEAN
 #define PORT "8080"
 #define BUFLEN 512
+#define SPAM_TIMEOUT 5
 
 #include <iostream>
 #include <Windows.h>
@@ -30,11 +32,10 @@ DWORD WINAPI ReceiveMessages(LPVOID lpParam) {
     while (true) {
         iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
         if (iResult > 0) {
-            recvbuf[iResult] = '\0';  // Добавляем нулевой символ в конце строки
+            recvbuf[iResult] = '\0';
 
-            // Печатаем полученное сообщение с новой строки
-            cout << "\r" << recvbuf << endl; // Для корректного вывода на новую строку
-            cout << "> ";  // Снова выводим приглашение для ввода
+            cout << "\r" << recvbuf << endl;
+            cout << "> "; 
         }
         else if (iResult == 0) {
             cout << "Соединение с сервером закрыто." << endl;
@@ -48,11 +49,13 @@ DWORD WINAPI ReceiveMessages(LPVOID lpParam) {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
+int main() {
     setlocale(0, "rus");
 
+    string ipAddress = "192.168.0.105";
+
     if (iResult != 0) {
-        printf("Ошибка загрузки бибилиотеки\n");
+        printf("Ошибка загрузки библиотеки\n");
         WSACleanup();
         return 1;
     }
@@ -62,7 +65,7 @@ int main(int argc, char* argv[]) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    iResult = getaddrinfo(argv[1], PORT, &hints, &result);
+    iResult = getaddrinfo(ipAddress.c_str(), PORT, &hints, &result);
     if (iResult != 0) {
         printf("Ошибка\n");
         WSACleanup();
@@ -91,14 +94,13 @@ int main(int argc, char* argv[]) {
         return 10;
     }
 
-    // Получаем имя
     char recvbuf[BUFLEN];
     iResult = recv(ConnectSocket, recvbuf, BUFLEN, 0);
     if (iResult > 0) {
         printf("%.*s", iResult, recvbuf);
 
         string name;
-        getline(cin, name);
+        getline(cin, name); 
 
         iResult = send(ConnectSocket, name.c_str(), (int)name.length(), 0);
         if (iResult == SOCKET_ERROR) {
@@ -109,11 +111,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Запускаем поток для получения сообщений
     DWORD threadId;
     CreateThread(NULL, 0, ReceiveMessages, &ConnectSocket, 0, &threadId);
 
-    // Основной цикл для отправки сообщений
     while (true)
     {
         cout << "> ";
