@@ -131,7 +131,7 @@ int main(int argc, char* argv[]) {
             return 4;
         }
 
-        cout << endl;
+        //cout << endl;
     }
 
     iResult = shutdown(ConnectSocket, SD_SEND);
