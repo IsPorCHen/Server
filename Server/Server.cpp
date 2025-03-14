@@ -1,8 +1,8 @@
-﻿#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #define PORT "8080"
 #define BUFLEN 512
-#define SPAM_TIMEOUT 5
+#define SPAM_TIMEOUT 1
 
 #include <iostream>
 #include <Windows.h>
@@ -24,9 +24,18 @@ int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
 struct addrinfo* result = NULL, * ptr = NULL, hints;
 
 std::map<int, std::string> clients;
-std::map<int, time_t> lastMessageTime;  // Временные метки последнего сообщения для каждого клиента
+std::map<int, time_t> lastMessageTime;
 std::vector<std::string> chatHistory;
 HANDLE hMutex;
+
+bool isNameTaken(const std::string& name) {
+    for (const auto& client : clients) {
+        if (client.second == name) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void logToFile(const std::string& message) {
     FILE* logFile = fopen("chat_log.txt", "a");
@@ -35,7 +44,7 @@ void logToFile(const std::string& message) {
         fclose(logFile);
     }
     else {
-        printf("Не удалось открыть файл для записи!\n");
+        printf("[Сервер] Не удалось открыть файл для записи!\n");
     }
 }
 
@@ -58,10 +67,10 @@ bool isSpam(int clientSocket) {
     if (lastMessageTime.find(clientSocket) != lastMessageTime.end()) {
         double timeDifference = difftime(currentTime, lastMessageTime[clientSocket]);
         if (timeDifference < SPAM_TIMEOUT) {
-            return true; // Спам: отправка сообщений слишком быстро
+            return true;
         }
     }
-    lastMessageTime[clientSocket] = currentTime;  // Обновляем временную метку
+    lastMessageTime[clientSocket] = currentTime;
     return false;
 }
 
@@ -69,71 +78,105 @@ DWORD WINAPI ClientThread(LPVOID lpParam) {
     SOCKET clientSocket = (SOCKET)lpParam;
     char recvbuf[BUFLEN];
     int iResult;
+    std::string clientName;
 
-    const char* prompt = "Введите ваше имя: ";
-    send(clientSocket, prompt, (int)strlen(prompt), 0);
+    while (true) {
+        const char* prompt = "Введите ваше имя: ";
+        send(clientSocket, prompt, (int)strlen(prompt), 0);
 
-    iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
-    std::string clientName(recvbuf, iResult);
+        iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
+        if (iResult <= 0) {
+            closesocket(clientSocket);
+            return 0;
+        }
 
-    WaitForSingleObject(hMutex, INFINITE);
-    clients[clientSocket] = clientName;
-    ReleaseMutex(hMutex);
+        clientName = std::string(recvbuf, iResult);
+        clientName.erase(clientName.find_last_not_of(" \n\r") + 1);
 
-    sendToAllClients(clientName + " присоединился в чат.");
+        WaitForSingleObject(hMutex, INFINITE);
+        if (!isNameTaken(clientName)) {
+            clients[clientSocket] = clientName;
+            ReleaseMutex(hMutex);
+            break;
+        }
+        ReleaseMutex(hMutex);
 
-    // Отправляем историю чата новому пользователю
-    for (const auto& msg : chatHistory) {
-        send(clientSocket, msg.c_str(), msg.size(), 0);
+        const char* nameTakenMsg = "Этот ник уже занят. Попробуйте другой.\n";
+        send(clientSocket, nameTakenMsg, (int)strlen(nameTakenMsg), 0);
     }
 
-    do {
-        iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
-        if (iResult > 0) {
-            std::string message(recvbuf, iResult);
+    printf("[%s] присоединился в чат\n", clientName.c_str());
+    logToFile("[" + clientName + "] присоединился в чат");
+    sendToAllClients(clientName + " присоединился в чат.");
 
-            // Проверка на спам
-            if (isSpam(clientSocket)) {
-                send(clientSocket, "Вы отправляете сообщения слишком быстро. Попробуйте позже.", 59, 0);
-                continue;
-            }
+    iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
+    if (iResult == SOCKET_ERROR) {
+        printf("[Сервер] Ошибка при получении имени: %d\n", WSAGetLastError());
+        logToFile("[Сервер] Ошибка при получении имени: " + WSAGetLastError());
+        closesocket(clientSocket);
+    }
+    else {
 
-            // Обработка команд
-            if (message[0] == '/') {
-                if (message == "/users") {
-                    std::string userList = "Активные пользователи: ";
-                    for (const auto& client : clients) {
-                        userList += client.second + ", ";
-                    }
-                    if (userList.length() > 0) {
-                        userList.pop_back();
-                        userList.pop_back();
-                    }
-                    send(clientSocket, userList.c_str(), userList.length(), 0);
+        WaitForSingleObject(hMutex, INFINITE);
+        clients[clientSocket] = clientName;
+        ReleaseMutex(hMutex);
+
+        for (const auto& msg : chatHistory) {
+            send(clientSocket, msg.c_str(), msg.size(), 0);
+        }
+
+        do {
+            iResult = recv(clientSocket, recvbuf, BUFLEN, 0);
+            if (iResult >= 0) {
+                std::string message(recvbuf, iResult);
+
+                if (isSpam(clientSocket)) {
+                    printf("[Сервер]-[%s]: Вы отправляете сообщения слишком быстро. Попробуйте позже\n", clientName.c_str());
+                    logToFile("[Сервер]-[" + clientName + "]: Вы отправляете сообщения слишком быстро. Попробуйте позже");
+                    send(clientSocket, "Вы отправляете сообщения слишком быстро. Попробуйте позже.\n", 59, 0);
+                    continue;
                 }
-                else if (message == "/exit") {
-                    send(clientSocket, "Выход из чата...", 17, 0);
-                    break;
+
+                if (message[0] == '/') {
+                    if (message == "/users") {
+                        printf("[%s]-[Сервер]: /users\n", clientName.c_str(), message.c_str());
+                        logToFile("[" + clientName + "] - [Сервер]: /users присоединился в чат");
+                        std::string userList = "Активные пользователи: ";
+                        for (const auto& client : clients) {
+                            userList += client.second + ", ";
+                        }
+                        if (userList.length() > 0) {
+                            userList.pop_back();
+                            userList.pop_back();
+                        }
+                        logToFile("[Сервер] - [" + clientName + "]: Активные пользователи: " + clientName.c_str() + " " + userList.c_str());
+                        printf("[Сервер] - [%s]: Активные пользователи: \n", clientName.c_str(), userList.c_str());
+                        send(clientSocket, userList.c_str(), userList.length(), 0);
+                    }
+                    else {
+                        send(clientSocket, "Неизвестная команда.\n", 21, 0);
+                        printf("[Сервер] - [%s]: Неизвестная команда\n", clientName.c_str());
+                        logToFile("[Сервер] - [" + clientName + "] присоединился в чат");
+                    }
                 }
                 else {
-                    send(clientSocket, "Неизвестная команда.", 21, 0);
+                    char chatMessage[BUFLEN];
+                    printf("[%s]: %s\n", clientName.c_str(), message);
+                    logToFile("[" + clientName + "]: " + message);
+                    sendToAllClients(chatMessage, clientSocket);
                 }
             }
-            else {
-                char chatMessage[BUFLEN];
-                sprintf(chatMessage, "[%s]: %s", clientName.c_str(), message.c_str());
-                sendToAllClients(chatMessage, clientSocket);
-            }
-        }
-    } while (iResult > 0);
+        } while (iResult > 0);
 
-    printf("[Сервер] Клиент отключён.\n");
-    closesocket(clientSocket);
+        printf("[Сервер] Клиент[%s] отключён.\n", clientName);
+        logToFile("[Сервер] Клиент[" + clientName + "] отключён.");
+        closesocket(clientSocket);
 
-    WaitForSingleObject(hMutex, INFINITE);
-    clients.erase(clientSocket);
-    ReleaseMutex(hMutex);
-    return 0;
+        WaitForSingleObject(hMutex, INFINITE);
+        clients.erase(clientSocket);
+        ReleaseMutex(hMutex);
+        return 0;
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -198,8 +241,6 @@ int main(int argc, char* argv[]) {
             printf("Ошибка accept: %d\n", WSAGetLastError());
             continue;
         }
-
-        printf("[Сервер] Новый клиент подключился.\n");
 
         HANDLE hThread = CreateThread(NULL, 0, ClientThread, (LPVOID)ClientSocket, 0, NULL);
         if (hThread == NULL) {
