@@ -2,7 +2,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define PORT "8080"
 #define BUFLEN 512
-#define SPAM_TIMEOUT 5
 
 #include <iostream>
 #include <Windows.h>
@@ -52,7 +51,7 @@ DWORD WINAPI ReceiveMessages(LPVOID lpParam) {
 int main() {
     setlocale(0, "rus");
 
-    string ipAddress = "192.168.0.105";
+    string ipAddress = "192.168.56.1";
 
     if (iResult != 0) {
         printf("Ошибка загрузки библиотеки\n");
@@ -122,6 +121,11 @@ int main() {
         string input;
         getline(cin, input);
 
+        if (input == "/exit") {
+            printf("Выход из чата...");
+            return 0;
+        }
+
         const char* sendbuf = input.c_str();
         iResult = send(ConnectSocket, sendbuf, (int)strlen(sendbuf), 0);
         if (iResult == SOCKET_ERROR) {
@@ -130,8 +134,6 @@ int main() {
             WSACleanup();
             return 4;
         }
-
-        //cout << endl;
     }
 
     iResult = shutdown(ConnectSocket, SD_SEND);
